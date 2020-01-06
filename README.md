@@ -1,5 +1,5 @@
-# Books Read in 2018
+# Books Read in 2019
 
-Data visualization of books read in 2018. Created plots that are posted here:
+Data visualization of books read in 2019. Created plots that are posted here:
 
-http://lstarnes.com/2019/01/03/my-2018-in-books/
+http://lstarnes.com/2020/01/05/my-2019-in-books/

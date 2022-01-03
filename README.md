@@ -1,5 +1,6 @@
-# Books Read in 2020
+# Books Read in 2021
 
-Data visualization of books read in 2020. Created plots that are posted here:
+Data visualization of books read in 2021. Created plots that are posted here:
 
-https://lstarnes.com/2021/01/05/my-2020-in-books
+<!-- TODO: fix link -->
+https://lstarnes.com/2022/01/05/my-2021-in-books

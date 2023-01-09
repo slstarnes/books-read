@@ -2,4 +2,4 @@
 
 Data visualization of books read in 2022. Created plots that are posted here:
 
-https://lstarnes.com/2022/01/11/my-2021-in-books/
+https://lstarnes.com/2023/01/06/my-2022-in-books/

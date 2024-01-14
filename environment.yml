@@ -3,11 +3,12 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-    - python=3.10
-    - pandas
-    - seaborn
-    - matplotlib
-    - jupyterlab
-    - requests
-    - pillow
-    - beautifulsoup4
+  - python=3.12
+  - pandas
+  - seaborn
+  - matplotlib
+  - jupyterlab
+  - jupyterlab-git
+  - requests
+  - pillow
+  - beautifulsoup4

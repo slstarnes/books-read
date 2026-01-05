@@ -10,5 +10,7 @@ dependencies:
   - jupyterlab
   - jupyterlab-git
   - requests
+  - requests-cache
   - pillow
   - beautifulsoup4
+  - python-dotenv

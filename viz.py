@@ -80,6 +80,67 @@ def _nice_date_axis(ax: plt.Axes, years: bool = True) -> None:
         ax.xaxis.set_minor_locator(mdates.MonthLocator(bymonth=(1, 7)))
     ax.grid(True, which="major", axis="both", alpha=0.25)
 
+AVG_DAYS_PER_MONTH = 365.2425 / 12  # 30.436875
+
+def monthly_pages_per_day_activity(
+    d: pd.DataFrame,
+    *,
+    start_col: str = "Date Started",
+    finish_col: str = "Date Read",
+    pages_col: str = "pageCount",
+) -> pd.Series:
+    """
+    Returns a monthly series (index = month-start Timestamp) of estimated reading pace in pages/day.
+
+    For each book:
+      rate_pd = pages / days_reading
+
+    For each month overlapped:
+      pages_in_month += rate_pd * overlap_days
+
+    Then:
+      pages_per_day_month = pages_in_month / days_in_month
+    """
+    s = d[[start_col, finish_col, pages_col]].copy()
+    s[start_col] = pd.to_datetime(s[start_col]).dt.normalize()
+    s[finish_col] = pd.to_datetime(s[finish_col]).dt.normalize()
+    s[pages_col] = pd.to_numeric(s[pages_col], errors="coerce")
+
+    s = s.dropna()
+    s = s[(s[pages_col] > 0) & (s[finish_col] >= s[start_col])].copy()
+
+    # inclusive-ish duration; avoid divide-by-zero for same-day reads
+    days_reading = (s[finish_col] - s[start_col]).dt.days.astype(float) + 1.0
+    rate_pd = s[pages_col] / days_reading  # pages per day for that book
+
+    pages_by_month = {}  # month_start -> allocated pages in that month
+
+    for (book_start, book_end, rpd) in zip(s[start_col], s[finish_col], rate_pd):
+        m = book_start.to_period("M").to_timestamp()
+        m_last = book_end.to_period("M").to_timestamp()
+
+        while m <= m_last:
+            month_start = m
+            month_end = (m + pd.offsets.MonthEnd(0))
+
+            overlap_start = max(book_start, month_start)
+            overlap_end = min(book_end, month_end)
+
+            if overlap_end >= overlap_start:
+                overlap_days = (overlap_end - overlap_start).days + 1
+                pages_by_month[month_start] = pages_by_month.get(month_start, 0.0) + (rpd * overlap_days)
+
+            m = m + pd.offsets.MonthBegin(1)
+
+    # Convert allocated pages/month into pages/day by dividing by days in that month
+    idx = pd.DatetimeIndex(sorted(pages_by_month.keys()), name="month")
+    pages_in_month = pd.Series([pages_by_month[k] for k in idx], index=idx, name="pages_in_month")
+
+    days_in_month = idx.to_series().apply(lambda ts: (ts + pd.offsets.MonthEnd(0)).day).astype(float)
+    pages_per_day = (pages_in_month / days_in_month).rename("pages_per_day_activity")
+
+    return pages_per_day
+
 
 # -----------------------------
 # Plot 1: Cumulative pages read over time
@@ -196,18 +257,18 @@ def plot_duration_vs_pages(
 # Plot 4: Gantt-style reading timeline
 # -----------------------------
 
-def plot_gantt_timeline(
+def plot_reading_timeline(
     df: pd.DataFrame,
     outpath: str | Path | None=None,
     *,
-    title: str = "Reading Timeline (Gantt Style)",
+    title: str = "Reading Timeline",
     max_books: int = 60,
     sort_by: str = "started",   # "started" or "finished"
 ) -> None:
     d = _prep_reading_df(df)
 
     # Need at least finished_dt. Start can be missing; if so, set start=finish (1 day bar)
-    g = d[["Title", "Author", "started_dt", "finished_dt"]].copy()
+    g = d[["Title (short)", "Author", "started_dt", "finished_dt"]].copy()
     g["started_dt"] = g["started_dt"].fillna(g["finished_dt"])
     g = g.dropna(subset=["finished_dt"])
 
@@ -236,7 +297,7 @@ def plot_gantt_timeline(
     ax.set_yticks(y)
 
     # Label as "Title — Author" but keep short
-    labels = (g["Title"].astype(str) + " — " + g["Author"].astype(str)).tolist()
+    labels = (g["Title (short)"].astype(str) + " — " + g["Author"].astype(str)).tolist()
     ax.set_yticklabels(labels, fontsize=8)
 
     ax.xaxis_date()
@@ -332,6 +393,64 @@ def plot_month_year_heatmap(
     if outpath:
         _savefig(fig, Path(outpath))
         return fig
+    
+
+# -----------------------------
+# Plot 5a: Heatmap (month x year) by pace
+# -----------------------------
+
+def plot_month_year_heatmap_ppd(
+    df: pd.DataFrame,
+    outpath: str | Path | None=None,
+    *,
+    title: str = "Reading Pace Heatmap (Pages/Day)",
+) -> None:
+    cmap = plt.colormaps["cividis"].copy()
+    d = _prep_reading_df(df)
+    ppd = monthly_pages_per_day_activity(d)
+
+    dfm = ppd.to_frame("ppd")
+    dfm["year"] = dfm.index.year
+    dfm["month"] = dfm.index.month
+    # remove 2015 - only 1 month of data
+    dfm = dfm[dfm["year"] >= 2016]
+    pivot = dfm.pivot(index="year", columns="month", values="ppd")
+    pivot = pivot.reindex(columns=range(1, 13))
+
+    data = pivot.to_numpy(dtype=float)
+
+    fig, ax = plt.subplots(figsize=(11, 5.2), constrained_layout=True)
+
+    mesh = ax.pcolormesh(
+            np.ma.masked_invalid(data),
+            cmap=cmap,
+            edgecolors="white",
+            linewidth=0.6,
+            shading="flat",
+        )
+
+    vmax = np.nanpercentile(pivot.values, 98)  # or 95
+    mesh.set_clim(vmin=0, vmax=vmax)
+
+    ax.set_title(title)
+    ax.set_xlabel("Month")
+    ax.set_ylabel("Year")
+
+    ax.set_xticks(np.arange(pivot.shape[1]) + 0.5)
+    ax.set_xticklabels(["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"])
+    ax.set_yticks(np.arange(len(pivot.index)) + 0.5)
+    ax.set_yticklabels(pivot.index.astype(int).tolist())
+    ax.invert_yaxis()
+
+    cbar = fig.colorbar(mesh, ax=ax, pad=0.02, location='bottom', 
+                        shrink=0.6, label="Pages/Day")
+    # cbar.set_label()
+    cbar.ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
+
+    if outpath:
+        _savefig(fig, Path(outpath))
+        return fig
+
 
 
 # -----------------------------
@@ -443,32 +562,53 @@ def plot_efficiency_trend(
         _savefig(fig, Path(outpath))
         return fig
 
-
 # -----------------------------
-# One-shot runner
+# Plot 8: Pace Over Time
 # -----------------------------
 
-def make_all_reading_plots(
+def plot_pace_over_time(
     df: pd.DataFrame,
-    outdir: str | Path = "reading_plots",
-) -> dict[str, Path]:
-    outdir = Path(outdir)
-    paths = {
-        "cumulative_pages": outdir / "01_cumulative_pages.png",
-        "pages_per_day": outdir / "02_pages_per_day.png",
-        "duration_vs_pages": outdir / "03_duration_vs_pages.png",
-        "gantt_timeline": outdir / "04_gantt_timeline.png",
-        "month_year_heatmap": outdir / "05_month_year_heatmap_pages.png",
-        "books_per_year_weighted": outdir / "06_books_per_year_weighted.png",
-        "efficiency_trend": outdir / "07_efficiency_trend.png",
-    }
+    outpath: str | Path | None=None,
+    *,
+    rolling_months: int = 3,
+    title: str = "Reading Pace (Pages/Day)",
+) -> None:
+    d = _prep_reading_df(df)
+    ppd = monthly_pages_per_day_activity(d)
+    dfm = ppd.to_frame("ppd")
+    dfm = dfm[dfm.index.year >= 2016]
+    fig, ax = plt.subplots(figsize=(11, 5.2), constrained_layout=True)
 
-    plot_cumulative_pages(df, paths["cumulative_pages"])
-    plot_pages_per_day(df, paths["pages_per_day"])
-    plot_duration_vs_pages(df, paths["duration_vs_pages"])
-    plot_gantt_timeline(df, paths["gantt_timeline"])
-    plot_month_year_heatmap(df, paths["month_year_heatmap"], value="pages")
-    plot_books_per_year_weighted(df, paths["books_per_year_weighted"])
-    plot_efficiency_trend(df, paths["efficiency_trend"])
+    ax.plot(
+        dfm.index,
+        dfm["ppd"],
+        color="tab:blue",
+        linewidth=1.2,
+        alpha=0.30,
+        label="Monthly pace",
+        zorder=1,
+    )
 
-    return paths
+    ax.plot(
+        dfm.index,
+        dfm["ppd"].rolling(window=rolling_months, min_periods=1).mean(),
+        color="tab:blue",
+        linewidth=2.8,
+        alpha=0.95,
+        label=f"{rolling_months}-month average",
+        zorder=3,
+    )
+
+    ax.set_title(title)
+    ax.set_xlabel("")
+    ax.set_ylabel("Pace (Pages/Day)")
+    ax.legend().set_visible(False)
+
+    ax.grid(True, axis="y", alpha=0.25)
+    ax.grid(False, axis="x")
+
+    ax.legend(frameon=False)
+
+    if outpath:
+        _savefig(fig, Path(outpath))
+        return fig

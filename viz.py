@@ -6,7 +6,11 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from matplotlib.ticker import FuncFormatter
+from matplotlib.ticker import FuncFormatter, NullFormatter, FixedLocator
+import datetime as dt
+from itertools import product
+import matplotlib.gridspec as gridspec
+
 
 
 # -----------------------------
@@ -66,12 +70,11 @@ def _prep_reading_df(
     return out
 
 
+
 def _savefig(fig: plt.Figure, outpath: Path, dpi: int = 200) -> None:
     outpath.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
     fig.savefig(outpath, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
-
 
 def _nice_date_axis(ax: plt.Axes, years: bool = True) -> None:
     if years:
@@ -79,6 +82,32 @@ def _nice_date_axis(ax: plt.Axes, years: bool = True) -> None:
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
         ax.xaxis.set_minor_locator(mdates.MonthLocator(bymonth=(1, 7)))
     ax.grid(True, which="major", axis="both", alpha=0.25)
+
+
+# def _create_date(date, year_cutoff):
+#     """Creates the date"""
+#     print(date)
+#     try:
+#         date = pd.to_datetime(date)
+#     except:
+#         pass
+#     # if date < dt.datetime(year_cutoff, 1, 1):
+#     #     date = dt.datetime(year_cutoff, 1, 1)
+#     date = date.clip(upper=dt.datetime(year_cutoff, 1, 1))
+
+#     mdate = mdates.date2num(date) 
+#     return mdate
+
+def _create_date2num(date):
+    """Creates the date"""
+    try:
+        date = pd.to_datetime(date)
+    except:
+        pass
+    if date < dt.datetime(date.year, 1, 1):
+        date = dt.datetime(date.year, 1, 1)
+    mdate = mdates.date2num(date) 
+    return mdate
 
 AVG_DAYS_PER_MONTH = 365.2425 / 12  # 30.436875
 
@@ -262,53 +291,132 @@ def plot_reading_timeline(
     outpath: str | Path | None=None,
     *,
     title: str = "Reading Timeline",
-    max_books: int = 60,
     sort_by: str = "started",   # "started" or "finished"
 ) -> None:
     d = _prep_reading_df(df)
+    years = list(range(2016, 2026))
+    counts = {}
+    for y in years:
+        counts[y] = int((d["Year Read"] == y).sum())
 
-    # Need at least finished_dt. Start can be missing; if so, set start=finish (1 day bar)
-    g = d[["Title (short)", "Author", "started_dt", "finished_dt"]].copy()
-    g["started_dt"] = g["started_dt"].fillna(g["finished_dt"])
-    g = g.dropna(subset=["finished_dt"])
+    def _transform(n: int) -> float:
+        n = max(1, n)
+        return float(n)
 
-    # Fix any inversions
-    bad = g["finished_dt"] < g["started_dt"]
-    g.loc[bad, ["started_dt", "finished_dt"]] = g.loc[bad, ["finished_dt", "started_dt"]].values
+    height_ratios = [_transform(counts[y]) for y in years]
 
-    g["duration"] = (g["finished_dt"] - g["started_dt"]).dt.days.replace(0, 1)
+    base_height_per_unit = 0.25  # controls vertical density
+    fig_height = max(6.0, sum(height_ratios) * base_height_per_unit)
 
-    if sort_by == "finished":
-        g = g.sort_values("finished_dt")
-    else:
-        g = g.sort_values("started_dt")
+    fig = plt.figure(figsize=(10, fig_height))
+    
+    gs = gridspec.GridSpec(
+        nrows=len(years),
+        ncols=1,
+        height_ratios=height_ratios,
+        hspace=0.07,
+    )
 
-    # Take most recent N (blog-friendly)
-    g = g.tail(max_books).reset_index(drop=True)
+    for i, y in enumerate(years):
+        ax = fig.add_subplot(gs[i])
 
-    fig_h = max(4.5, 0.18 * len(g) + 1.2)
-    fig, ax = plt.subplots(figsize=(11, fig_h))
+        g = d.loc[
+            d["Year Read"] == y,
+            ["Title (short)", "Author", "Date Started", "Date Read", "Finished"],
+        ].copy()
 
-    y = np.arange(len(g))
-    left = mdates.date2num(g["started_dt"])
-    width = g["duration"].to_numpy()
+        # start fallback: if started missing, treat as same-day read
+        g["started_dt"] = pd.to_datetime(g["Date Started"], errors="coerce")
+        g["finished_dt"] = pd.to_datetime(g["Date Read"], errors="coerce")
+        g["started_dt"] = g["started_dt"].fillna(g["finished_dt"])
+        g = g.dropna(subset=["finished_dt"])
 
-    ax.barh(y, width, left=left)
-    ax.set_yticks(y)
+        # guard against inversions
+        bad = g["finished_dt"] < g["started_dt"]
+        if bad.any():
+            g.loc[bad, ["started_dt", "finished_dt"]] = g.loc[bad, ["finished_dt", "started_dt"]].values
 
-    # Label as "Title — Author" but keep short
-    labels = (g["Title (short)"].astype(str) + " — " + g["Author"].astype(str)).tolist()
-    ax.set_yticklabels(labels, fontsize=8)
+        # sort within year by started or finished
+        if sort_by == "started":
+            g = g.sort_values("started_dt")
+        else:
+            g = g.sort_values("finished_dt")
 
-    ax.xaxis_date()
-    ax.xaxis.set_major_locator(mdates.YearLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-    ax.grid(True, axis="x", alpha=0.25)
+        ylabels = g["Title (short)"].astype(str).tolist()
+        start_dates = g["started_dt"].tolist()
+        end_dates = g["finished_dt"].tolist()
 
-    ax.set_title(title)
-    ax.set_xlabel("Calendar Date")
-    ax.set_ylabel("Books")
+        ilen = len(ylabels)
+        ypos = np.arange(ilen)  # 0..N-1
 
+        # Colors
+        bar_color = "#4C72B0"
+        
+        clist = [bar_color] * len(g)
+
+        # Y-label color (optional)
+        ylabel_colors = ["black" if bool(v) else "gray" for v in g["Finished"].tolist()]
+
+        # Draw bars
+        bar_height = 0.6
+        for j in range(ilen):
+            start_num = mdates.date2num(start_dates[j])
+            end_num = mdates.date2num(end_dates[j])
+            width = max(end_num - start_num, 1.0)  # at least 1 day visible
+
+            ax.barh(
+                ypos[j],
+                width,
+                left=start_num,
+                height=bar_height,
+                align="center",
+                alpha=0.85,
+                color=clist[j],
+            )
+
+        # Axis formatting
+        ax.set_xlim(dt.datetime(y, 1, 1), dt.datetime(y, 12, 31))
+        ax.set_ylim(-0.5, ilen - 0.5)
+        ax.invert_yaxis()  # top book at top, like your example
+
+
+        ax.text(
+            0.98, 0.95,
+            str(y),
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=14,
+            fontweight="bold",
+            color="#333333",
+            bbox=dict(
+                boxstyle="round,pad=0.28",
+                facecolor="none",
+                edgecolor="#444444",
+                linewidth=1.2,
+                alpha=0.85,
+            ),
+        )
+
+        ax.set_yticks(ypos)
+        y_fontsize = 8
+        ax.set_yticklabels(ylabels, fontsize=y_fontsize)
+        for tick, c in zip(ax.get_yticklabels(), ylabel_colors):
+            tick.set_color(c)
+        ax.tick_params(axis="y", labelleft=True)
+
+        ax.xaxis_date()
+        ax.xaxis.set_major_locator(mdates.MonthLocator(bymonthday=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
+
+        ax.grid(True, axis="x", alpha=0.35)
+        ax.grid(False, axis="y")
+
+        ax.tick_params(axis="x", labelsize=9, colors="#555555")
+
+        # Clean spines
+        for spine in ("top", "right", "left"):
+            ax.spines[spine].set_visible(False)
     if outpath:
         _savefig(fig, Path(outpath))
         return fig
@@ -325,9 +433,7 @@ def plot_month_year_heatmap(
     title: str = "Heatmap: Pages Finished by Month & Year",
     value: str = "pages",  # "pages" or "books"
 ) -> None:
-    # Make NaNs visually distinct (e.g., light gray) instead of blending with low values
-    cmap = plt.colormaps["viridis"].copy()     # colorful; try "viridis"/"magma"/"plasma" too
-    # cmap.set_bad(color="#f2f2f2")            # cells with NaN
+    cmap = plt.colormaps["viridis"].copy()
     d = _prep_reading_df(df)
 
     if value == "books":
@@ -348,9 +454,7 @@ def plot_month_year_heatmap(
 
     # Ensure columns 1..12 exist
     pivot = pivot.reindex(columns=range(1, 13), fill_value=0).sort_index()
-    pivot.to_csv("pivot.csv")
     fig, ax = plt.subplots(figsize=(11, 5.2))
-    # im = ax.imshow(pivot.values, aspect="auto", cmap=cmap, interpolation="nearest")
 
     mesh = ax.pcolormesh(
             np.ma.masked_invalid(pivot.values),
@@ -360,7 +464,7 @@ def plot_month_year_heatmap(
             shading="flat",
         )
 
-    vmax = np.nanpercentile(pivot.values, 95)  # or 95
+    vmax = np.nanpercentile(pivot.values, 95)
     mesh.set_clim(vmin=0, vmax=vmax)
 
     ax.set_title(title)

@@ -113,9 +113,8 @@ def create_composite(name: str, files_images: list, cols: int):
     return out
 
 
-def create_composite_images(image_files, variant_name=""):
+def create_composite_images(image_files, variant_name="", column_set=(4,5,6,7,8,9)):
     fill_color = '#EAEAEA' # matches lstarnes.com background
-    column_set = (4,5,6,7,8,9)
     for c in column_set:
         create_composite(f'composite-{c}c{variant_name}.png', image_files, c)
         blanks_needed = c * math.ceil(len(image_files) / c) - len(image_files)

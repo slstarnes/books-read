@@ -1,5 +1,5 @@
-# Books Read in 2023
+# Books Read in 2025
 
-Data visualization of books read in 2023. Created plots that are posted here:
+Data visualization of books read in 2025. Created plots that are posted here:
 
-<https://lstarnes.com/2025/01/19/my-2024-in-books/>
+<https://lstarnes.com/2026/01/13/my-2025-in-books/>
